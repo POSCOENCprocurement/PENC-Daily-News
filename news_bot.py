@@ -77,16 +77,30 @@ def is_recent(published_str):
 def fetch_article_content(url):
     """링크를 타고 들어가서 기사 본문 텍스트를 긁어옴 (스크랩용)"""
     try:
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/91.0.4472.124 Safari/537.36'}
-        # 타임아웃 5초 설정 (너무 오래 걸리면 패스)
-        response = requests.get(url, headers=headers, timeout=5)
+        # 구글 뉴스 리다이렉트 등을 통과하기 위한 헤더 보강
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7'
+        }
+        
+        # Session 사용으로 리다이렉트 추적 능력 향상
+        session = requests.Session()
+        # 타임아웃 10초로 넉넉하게 설정
+        response = session.get(url, headers=headers, timeout=10, allow_redirects=True)
         response.encoding = response.apparent_encoding # 한글 깨짐 방지
         
+        # 구글 뉴스 기본 페이지가 긁혔는지 확인 (실패로 간주)
+        if "Comprehensive up-to-date news coverage" in response.text:
+            return None
+
         if response.status_code == 200:
             soup = BeautifulSoup(response.text, 'html.parser')
             
-            # 일반적인 기사 본문 태그 찾기 (article, div 등)
-            # 네이버 뉴스, 다음 뉴스 등 주요 포털 구조 고려
+            # 불필요한 요소 제거 (광고, 메뉴, 스크립트 등)
+            for element in soup(["script", "style", "header", "footer", "nav", "aside", "iframe", "form"]):
+                element.decompose()
+
             content = ""
             
             # 1. <article> 태그 우선 검색
@@ -94,22 +108,32 @@ def fetch_article_content(url):
             if article:
                 content = article.get_text(strip=True, separator='\n')
             else:
-                # 2. 본문으로 추정되는 모든 <p> 태그 수집
-                paragraphs = soup.find_all('p')
-                # 너무 짧은 문장(메뉴명 등)은 제외하고 합치기
-                content = "\n".join([p.get_text(strip=True) for p in paragraphs if len(p.get_text(strip=True)) > 30])
+                # 2. 본문으로 추정되는 <div>나 <p> 태그 수집
+                # 주요 언론사별 본문 클래스명 패턴 시도
+                target_divs = soup.find_all('div', class_=re.compile(r'(article|content|body|detail)', re.I))
+                if target_divs:
+                    # 가장 텍스트가 긴 div 선택
+                    best_div = max(target_divs, key=lambda x: len(x.get_text()))
+                    content = best_div.get_text(strip=True, separator='\n')
+                else:
+                    # 최후의 수단: 모든 <p> 태그 수집
+                    paragraphs = soup.find_all('p')
+                    # 너무 짧은 문장 제외하고 합치기
+                    content = "\n".join([p.get_text(strip=True) for p in paragraphs if len(p.get_text(strip=True)) > 20])
             
-            # 내용이 너무 없으면 메타 태그 description 가져오기
-            if len(content) < 100:
-                meta_desc = soup.find('meta', attrs={'name': 'description'}) or soup.find('meta', attrs={'property': 'og:description'})
-                if meta_desc:
-                    content = meta_desc.get('content', '')
+            # 텍스트 정제 (연속된 공백/줄바꿈 제거)
+            content = re.sub(r'\n\s*\n', '\n\n', content)
+            
+            # 내용이 너무 짧거나 구글 안내 문구면 실패 처리
+            if len(content) < 50 or "Comprehensive up-to-date" in content:
+                return None
 
-            return content[:1000] + "..." if len(content) > 1000 else content # 최대 1000자까지만 (PDF 용량 고려)
-    except Exception:
-        return "(본문 수집 실패 - 원문 링크를 확인하세요)"
+            return content[:1500] + "..." if len(content) > 1500 else content # 최대 1500자
+    except Exception as e:
+        print(f"    - Scraping Error: {e}")
+        return None
     
-    return "(본문 내용을 불러올 수 없습니다)"
+    return None
 
 def fetch_news():
     """RSS 뉴스 수집 + 본문 스크랩"""
@@ -134,16 +158,29 @@ def fetch_news():
                         continue
 
                     if not any(item['link'] == entry.link for item in news_items):
-                        # 여기서 본문 스크랩 실행 (시간이 좀 걸림)
+                        # RSS에 기본적으로 포함된 요약문(summary) 가져오기 (HTML 태그 제거)
+                        rss_summary = ""
+                        if hasattr(entry, 'summary'):
+                             rss_summary = BeautifulSoup(entry.summary, "html.parser").get_text(strip=True)
+                        elif hasattr(entry, 'description'):
+                             rss_summary = BeautifulSoup(entry.description, "html.parser").get_text(strip=True)
+
                         print(f"  Scraping: {entry.title[:10]}...")
-                        full_text = fetch_article_content(entry.link)
+                        # 본문 스크랩 시도
+                        scraped_text = fetch_article_content(entry.link)
                         
+                        # 스크랩 성공하면 본문 사용, 실패하면 RSS 요약문 사용
+                        final_text = scraped_text if scraped_text else f"(본문 수집 불가 - 요약본 제공)\n\n{rss_summary}"
+                        
+                        if not final_text.strip():
+                            final_text = "(본문 내용을 불러올 수 없습니다. 링크를 확인해주세요.)"
+
                         news_items.append({
                             "title": entry.title,
                             "link": entry.link,
                             "keyword": keyword,
                             "date": entry.published,
-                            "full_text": full_text # 본문 저장
+                            "full_text": final_text # 본문 저장
                         })
         except Exception as e:
             print(f"⚠️ '{keyword}' 오류: {e}")
@@ -239,6 +276,10 @@ def create_scrap_pdf(news_items):
         pdf.set_text_color(30, 30, 30)
         # 본문 텍스트 정리 (줄바꿈 등)
         body_text = item.get('full_text', '내용 없음').replace('\t', '  ')
+        # 한글 폰트에서 유니코드 문자가 깨질 수 있으므로 기본 정제
+        body_text = body_text.encode('latin-1', 'replace').decode('latin-1') # fpdf 인코딩 에러 방지용 (심플 처리)
+        # 실제로는 fpdf2가 유니코드를 꽤 잘 처리하지만, 안전장치로 특수문자 일부 제외
+        
         pdf.multi_cell(0, 5, body_text)
         
         # 기사 간 구분선
