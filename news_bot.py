@@ -2,18 +2,21 @@ import os
 import smtplib
 import feedparser
 import time
-import urllib.parse # 주소 변환을 위한 도구 추가
+import urllib.parse
+import urllib.request # 폰트 다운로드를 위해 추가
+import re # HTML 태그 제거용
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from datetime import datetime, timedelta
+from email.mime.application import MIMEApplication # 파일 첨부용
+from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 import google.generativeai as genai
 
 # --- 환경 변수 설정 (GitHub Secrets) ---
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
-EMAIL_SENDER = os.environ.get("EMAIL_SENDER")      # 발신자 Gmail 주소
-EMAIL_PASSWORD = os.environ.get("EMAIL_PASSWORD")  # 발신자 Gmail 앱 비밀번호
-EMAIL_RECEIVERS = os.environ.get("EMAIL_RECEIVERS") # 수신자 이메일 (콤마로 구분)
+EMAIL_SENDER = os.environ.get("EMAIL_SENDER")
+EMAIL_PASSWORD = os.environ.get("EMAIL_PASSWORD")
+EMAIL_RECEIVERS = os.environ.get("EMAIL_RECEIVERS")
 
 # --- 설정: 키워드 ---
 KEYWORDS = [
@@ -30,6 +33,12 @@ KEYWORDS = [
     "건설 노조 동향"
 ]
 
+def get_korea_time():
+    """서버 시간(UTC)을 한국 시간(KST)으로 변환"""
+    utc_now = datetime.now(timezone.utc)
+    kst_now = utc_now + timedelta(hours=9)
+    return kst_now
+
 def is_recent(published_str):
     """뉴스 날짜가 24시간 이내인지 확인"""
     if not published_str: return False
@@ -38,40 +47,37 @@ def is_recent(published_str):
         if pub_date.tzinfo:
             pub_date = pub_date.replace(tzinfo=None)
         
-        one_day_ago = datetime.now() - timedelta(hours=24)
+        # UTC 기준 24시간 이내 비교
+        now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+        one_day_ago = now_utc - timedelta(hours=24)
         return pub_date > one_day_ago
     except:
         return True
 
 def fetch_news():
-    """RSS를 통해 뉴스 수집 (띄어쓰기 에러 해결 버전)"""
+    """RSS를 통해 뉴스 수집"""
     news_items = []
-    
     print("🔍 뉴스 수집 시작...")
+    
     for keyword in KEYWORDS:
-        # [중요] 검색어와 명령어를 URL 전용 문자로 변환 (인코딩)
-        # 예: "건설 자재" -> "%EA%B1%B4%EC%84%A4%20%EC%9E%90%EC%9E%AC"
         encoded_query = urllib.parse.quote(f"{keyword} when:1d")
         url = f"https://news.google.com/rss/search?q={encoded_query}&hl=ko&gl=KR&ceid=KR:ko"
         
         try:
             feed = feedparser.parse(url)
-            
-            # 피드 파싱 자체에러 체크
-            if hasattr(feed, 'bozo_exception') and feed.bozo_exception:
-                 # 인코딩 문제 등으로 파싱 실패시 무시하고 계속 진행
-                 continue
+            if hasattr(feed, 'bozo_exception') and feed.bozo_exception: continue
 
-            for entry in feed.entries[:3]: # 키워드 당 3개
+            for entry in feed.entries[:3]:
                 if is_recent(entry.published):
                     if not any(item['link'] == entry.link for item in news_items):
                         news_items.append({
                             "title": entry.title,
                             "link": entry.link,
-                            "keyword": keyword
+                            "keyword": keyword,
+                            "date": entry.published
                         })
         except Exception as e:
-            print(f"⚠️ '{keyword}' 수집 중 오류 (건너뜀): {e}")
+            print(f"⚠️ '{keyword}' 오류: {e}")
             continue
             
     print(f"✅ 총 {len(news_items)}개의 최신 뉴스 수집 완료.")
@@ -88,29 +94,20 @@ def generate_report(news_items):
 
         news_text = ""
         for idx, item in enumerate(news_items):
-            news_text += f"[{idx+1}] 키워드: {item['keyword']} | 제목: {item['title']} | 링크: {item['link']}\n"
+            news_text += f"[{idx+1}] {item['title']}\n"
 
         prompt = f"""
         당신은 포스코이앤씨 구매실의 노련한 전문가입니다. 
-        아래 수집된 뉴스 목록을 보고, 구매 담당자에게 보낼 'Daily Market & Risk Briefing' 이메일 본문을 HTML로 작성해 주세요.
+        아래 뉴스 목록을 보고, 'Daily Market & Risk Briefing' 이메일 본문을 HTML로 작성해 주세요.
 
         [뉴스 목록]
         {news_text}
 
-        [작성 지침 - 중요]
-        1. **주식/투자 제외:** '주가 상승/하락', '목표 주가', '증권사 리포트' 등 주식 투자와 관련된 내용은 **절대 제외**하세요.
-        2. **관점:** 철저히 '구매/자재/공사/법규' 실무 담당자 입장에서 작성하세요.
-        
-        [출력 형식 - HTML Body 내부]
-        1. 상단에 **[오늘의 시장 날씨]** 섹션을 만들고 ☀️/☁️/☔와 함께 전체 요약을 1줄 작성하세요. (배경색: #f3f4f6, padding: 10px)
-        2. 각 기사는 아래 포맷을 엄수하세요:
-            - <h4 style="margin-bottom:2px; margin-top:15px; color:#0054a6;">[카테고리] 제목 (링크)</h4>
-            - <ul style="margin-top:0; padding-left:20px; font-size:14px; color:#333;">
-                <li><b>핵심:</b> 기사 내용 요약</li>
-                <li><b>💡시사점:</b> 건설사 구매팀 대응 방안 (1줄)</li>
-            </ul>
-        3. 카테고리 분류: [규제/리스크], [자재/시황], [글로벌/물류], [기술/혁신], [ESG/상생], [경쟁사/동향], [노무/인력]
-        4. HTML 코드만 출력하세요 (```html 등 마크다운 태그 제외).
+        [작성 지침]
+        1. 주식/투자 내용 제외. 구매/자재/법규 실무 관점 유지.
+        2. 상단에 [오늘의 시장 날씨] 요약(1줄) 포함.
+        3. 각 기사는 '핵심'과 '💡시사점'으로 정리.
+        4. HTML 형식으로 작성 (제목 제외, 본문만).
         """
         
         response = model.generate_content(prompt)
@@ -119,11 +116,78 @@ def generate_report(news_items):
         print(f"❌ AI 분석 중 오류: {e}")
         return None
 
-def send_email(html_body):
-    """이메일 발송"""
+# --- PDF 생성 관련 기능 ---
+def create_pdf(news_items, ai_summary_html):
+    """뉴스 목록과 AI 요약을 PDF로 생성"""
+    print("📄 PDF 생성 시작...")
+    try:
+        from fpdf import FPDF
+    except ImportError:
+        print("❌ fpdf2 라이브러리가 없습니다. requirements.txt를 확인하세요.")
+        return None
+
+    # 1. 한글 폰트 다운로드 (나눔고딕)
+    font_path = 'NanumGothic.ttf'
+    if not os.path.exists(font_path):
+        url = "https://raw.githubusercontent.com/google/fonts/main/ofl/nanumgothic/NanumGothic-Regular.ttf"
+        urllib.request.urlretrieve(url, font_path)
+
+    # 2. PDF 설정
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.add_font('Nanum', '', font_path)
+    pdf.set_font('Nanum', size=10)
+
+    # 3. 타이틀 및 날짜
+    kst_now = get_korea_time()
+    date_str = kst_now.strftime("%Y년 %m월 %d일 (%a)")
+    
+    pdf.set_font('Nanum', size=16)
+    pdf.cell(0, 10, 'POSCO E&C 구매실 Daily Briefing', ln=True, align='C')
+    pdf.set_font('Nanum', size=10)
+    pdf.cell(0, 10, f'발행일: {date_str} | Generated by AI Agent', ln=True, align='R')
+    pdf.ln(5)
+
+    # 4. AI 요약 (HTML 태그 제거 후 텍스트만 넣기)
+    pdf.set_font('Nanum', size=12)
+    pdf.cell(0, 10, '[Part 1. AI Insight Summary]', ln=True)
+    pdf.set_font('Nanum', size=10)
+    
+    # 간단한 태그 제거 (정규식)
+    clean_summary = re.sub('<[^<]+?>', '', ai_summary_html).strip()
+    # 텍스트가 너무 길면 잘릴 수 있으므로 multi_cell 사용
+    pdf.multi_cell(0, 6, clean_summary)
+    pdf.ln(10)
+
+    # 5. 뉴스 스크랩 (링크 포함)
+    pdf.set_font('Nanum', size=12)
+    pdf.cell(0, 10, '[Part 2. News Scrap]', ln=True)
+    
+    for item in news_items:
+        pdf.set_font('Nanum', size=10)
+        # 키워드
+        pdf.set_text_color(100, 100, 100) # 회색
+        pdf.cell(0, 6, f"[{item['keyword']}]", ln=True)
+        
+        # 제목 (링크 연결)
+        pdf.set_text_color(0, 0, 255) # 파란색
+        pdf.set_font('Nanum', size=11, style='U') # 밑줄 효과 흉내(폰트 지원시) 또는 그냥 파란색
+        # FPDF link 기능 사용
+        pdf.cell(0, 6, item['title'], ln=True, link=item['link'])
+        
+        pdf.ln(2)
+    
+    filename = f"Purchase_Briefing_{kst_now.strftime('%Y%m%d')}.pdf"
+    pdf.output(filename)
+    print(f"✅ PDF 생성 완료: {filename}")
+    return filename
+
+def send_email(html_body, pdf_file=None):
+    """이메일 발송 (PDF 첨부 기능 추가)"""
     if not html_body: return
 
-    today_str = datetime.now().strftime("%Y년 %m월 %d일 (%a)")
+    kst_now = get_korea_time()
+    today_str = kst_now.strftime("%Y년 %m월 %d일 (%a)")
     subject = f"[구매실 Daily] {today_str} Market & Risk Briefing"
     
     full_html = f"""
@@ -134,16 +198,10 @@ def send_email(html_body):
         </div>
         <div style="padding: 20px; border: 1px solid #ddd;">
             <p>안녕하십니까, 구매실 여러분.<br>
-            AI Agent가 선별한 오늘의 주요 리스크 및 시황 정보입니다.</p>
+            AI Agent가 선별한 {today_str} 주요 리스크 및 시황 정보입니다.<br>
+            <strong>상세 내용은 첨부된 PDF 파일을 참고해 주세요.</strong></p>
             <hr style="border:0; border-top:1px solid #eee; margin: 20px 0;">
-            
             {html_body}
-            
-            <hr style="border:0; border-top:1px solid #eee; margin: 20px 0;">
-            <p style="font-size: 12px; color: #888;">
-                * 본 메일은 Google News 및 Gemini AI를 통해 자동 발송되었습니다.<br>
-                * 문의: 구매기획 그룹
-            </p>
         </div>
     </body>
     </html>
@@ -153,7 +211,16 @@ def send_email(html_body):
     msg['From'] = EMAIL_SENDER
     msg['To'] = EMAIL_RECEIVERS
     msg['Subject'] = subject
+    
+    # 본문 추가
     msg.attach(MIMEText(full_html, 'html'))
+
+    # PDF 첨부
+    if pdf_file and os.path.exists(pdf_file):
+        with open(pdf_file, "rb") as f:
+            attach = MIMEApplication(f.read(), _subtype="pdf")
+            attach.add_header('Content-Disposition', 'attachment', filename=pdf_file)
+            msg.attach(attach)
 
     try:
         server = smtplib.SMTP('smtp.gmail.com', 587)
@@ -173,9 +240,22 @@ if __name__ == "__main__":
         items = fetch_news()
         if items:
             report_html = generate_report(items)
+            # PDF 생성
+            pdf_filename = create_pdf(items, report_html)
+            
             if report_html:
-                send_email(report_html)
+                send_email(report_html, pdf_filename)
             else:
-                print("❌ 리포트 생성 실패 (AI 응답 없음)")
+                print("❌ 리포트 생성 실패")
         else:
             print("수집된 뉴스가 없습니다.")
+```
+
+### 🚨 중요: requirements.txt 파일 수정
+
+PDF 기능을 쓰려면 **`requirements.txt`** 파일도 꼭 수정해야 합니다. 깃허브에서 `requirements.txt` 파일을 열고 내용을 아래와 같이 바꿔주세요. (`fpdf2`가 추가되었습니다.)
+
+```text
+feedparser
+google-generativeai
+fpdf2
