@@ -107,7 +107,7 @@ def fetch_news():
     return news_items
 
 def generate_report(news_items):
-    """Gemini AI 리포트 (가독성 개선 및 버튼형 링크 적용)"""
+    """Gemini AI 리포트 (와이드 레이아웃 및 디자인 최적화)"""
     if not news_items: return None
     
     kst_now = get_korea_time()
@@ -120,13 +120,14 @@ def generate_report(news_items):
 
         news_text = ""
         for idx, item in enumerate(news_items):
+            # 링크를 포함하여 AI에게 전달
             news_text += f"[{idx+1}] {item['title']} (키워드: {item['keyword']}) | Link: {item['link']}\n"
 
-        # 프롬프트 수정: 가독성을 위한 카드형 디자인 및 별도 링크 버튼 요청
+        # 프롬프트 수정: 와이드 레이아웃에 맞춘 큼직한 디자인 요청
         prompt = f"""
         오늘은 {today_formatted}입니다.
         당신은 **포스코이앤씨 구매계약실**의 수석 애널리스트입니다.
-        아래 뉴스들을 바탕으로 'Daily Market & Risk Briefing' 이메일을 작성하세요.
+        아래 뉴스들을 바탕으로 경영진 및 실무자가 PC에서 보기 편한 'Daily Market & Risk Briefing' 이메일을 작성하세요.
 
         [뉴스 목록]
         {news_text}
@@ -136,27 +137,29 @@ def generate_report(news_items):
         2. **주식/투자 배제**: 건설 테마주, 주가 등락 내용은 절대 포함하지 마세요.
         3. **구매계약실 관점**: 계약, 납기, 단가, 법적 리스크 위주로 분석하세요.
 
-        [보고서 형식 (HTML Style)]
+        [보고서 형식 (HTML Style - Wide Layout)]
         - **절대** `<html>`, `<head>`, `<body>` 태그를 쓰지 마세요. `<div>`로 시작하는 본문 내용만 작성하세요.
-        - **가독성 강화**: 글자 크기를 키우고(15px 이상), 줄 간격을 넉넉히(1.6) 잡으세요.
-        - **링크 분리**: 제목에 링크를 걸지 말고, 별도의 '🔗 기사 원문 보기' 버튼을 만드세요.
+        - **디자인 컨셉**: 시원시원한 여백, 큰 폰트, 명확한 구분선.
+        - **링크**: 제목에 링크를 걸지 말고, 우측 하단이나 별도 라인에 '🔗 원문 보기' 버튼을 배치하세요.
         
         [HTML 구조 가이드]
-        1. **시장 날씨 요약**: 
-           `<div style="background-color: #e3f2fd; padding: 20px; border-radius: 12px; margin-bottom: 30px; border-left: 6px solid #0054a6;">`
-           안에 ☀️/☁️/☔ 아이콘과 함께 시장 요약 1문장을 굵은 글씨로 작성.
+        1. **시장 날씨 요약 (Executive Summary)**: 
+           `<div style="background-color: #f1f8ff; padding: 25px; border-radius: 4px; margin-bottom: 40px; border: 1px solid #cce5ff;">`
+           - 제목: `<h3>` 태그로 "Today's Market Weather" 작성.
+           - 내용: ☀️/☁️/☔ 아이콘과 함께 시장 요약 1~2문장을 16px 크기로 작성.
         
         2. **카테고리 섹션**: 
-           `[규제/리스크]`, `[자재/시황]`, `[글로벌/물류]` 등 섹션 제목을 `<h3>` 태그로 명확히 구분 (`color: #222; margin-top: 30px; border-bottom: 2px solid #ddd; padding-bottom: 10px;`).
+           `[규제/리스크]`, `[자재/시황]`, `[글로벌/물류]` 등 섹션 제목을 `<h2>` 태그로 작성.
+           - 스타일: `color: #0054a6; border-bottom: 2px solid #0054a6; padding-bottom: 10px; margin-top: 40px; margin-bottom: 20px; font-size: 22px;`
         
-        3. **기사 카드**:
+        3. **기사 카드 (Wide Card)**:
            각 기사는 아래 스타일을 적용하세요:
-           `<div style="background-color: #ffffff; border: 1px solid #e0e0e0; border-radius: 12px; padding: 20px; margin-bottom: 20px; box-shadow: 0 2px 5px rgba(0,0,0,0.03);">`
+           `<div style="background-color: #ffffff; border-bottom: 1px solid #eeeeee; padding: 25px 0; margin-bottom: 0;">`
            
-           - **제목**: `<div style="font-size: 18px; font-weight: bold; color: #111; margin-bottom: 10px;">제목</div>`
-           - **내용**: `<div style="font-size: 15px; color: #444; line-height: 1.6; margin-bottom: 15px;">기사 핵심 요약...</div>`
-           - **인사이트**: `<div style="background-color: #f8f9fa; padding: 12px; border-radius: 8px; font-size: 14px; color: #0054a6; font-weight: 600; margin-bottom: 15px;">💡 Insight: 구매계약실 대응 방안...</div>`
-           - **버튼**: `<a href="..." style="display: inline-block; background-color: #0054a6; color: #ffffff; padding: 10px 15px; text-decoration: none; border-radius: 6px; font-size: 13px; font-weight: bold;">🔗 기사 원문 보기</a>`
+           - **제목**: `<div style="font-size: 20px; font-weight: bold; color: #222; margin-bottom: 12px; line-height: 1.4;">제목</div>`
+           - **내용**: `<div style="font-size: 16px; color: #555; line-height: 1.7; margin-bottom: 15px;">기사 핵심 요약 내용...</div>`
+           - **인사이트 박스**: `<div style="background-color: #f8f9fa; padding: 15px; border-left: 4px solid #0054a6; font-size: 15px; color: #333; margin-bottom: 15px;"><strong>💡 Insight:</strong> 구매계약실 대응 방안...</div>`
+           - **버튼**: `<div style="text-align: right;"><a href="..." style="display: inline-block; background-color: #f1f3f5; color: #495057; padding: 8px 16px; text-decoration: none; border-radius: 4px; font-size: 14px; font-weight: 600; border: 1px solid #dee2e6;">🔗 기사 원문 보기</a></div>`
         """
         
         response = model.generate_content(prompt)
@@ -166,55 +169,58 @@ def generate_report(news_items):
         return None
 
 def send_email(html_body):
-    """이메일 발송 (디자인 템플릿 개선 - 헤더 가독성 및 줄바꿈 방지)"""
+    """이메일 발송 (PC 최적화 와이드 레이아웃 적용)"""
     if not html_body: return
 
     kst_now = get_korea_time()
     today_str = kst_now.strftime("%Y년 %m월 %d일")
     subject = f"[Daily] {today_str} 구매계약실 시장 동향 보고"
     
-    # 이메일 클라이언트를 위한 인라인 스타일이 적용된 HTML 템플릿
+    # 이메일 클라이언트를 위한 인라인 스타일이 적용된 HTML 템플릿 (Width 800px)
     full_html = f"""
     <!DOCTYPE html>
     <html>
     <head>
     <meta charset="utf-8">
     <style>
-        body {{ font-family: 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif; line-height: 1.6; color: #333; background-color: #f4f6f8; margin: 0; padding: 0; }}
-        .email-container {{ max-width: 600px; margin: 0 auto; background-color: #ffffff; }}
-        .header {{ background-color: #0054a6; color: #ffffff; padding: 25px 20px; text-align: center; }}
-        .header h1 {{ margin: 0 0 10px 0; font-size: 26px; font-weight: bold; letter-spacing: -0.5px; }}
-        .header-info {{ font-size: 14px; opacity: 0.9; line-height: 1.4; }}
-        .content {{ padding: 30px 20px; }}
-        .intro-text {{ margin-bottom: 30px; font-size: 16px; color: #444; }}
-        .footer {{ background-color: #f9f9f9; padding: 20px; text-align: center; font-size: 12px; color: #888; border-top: 1px solid #eee; }}
+        body {{ font-family: 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif; line-height: 1.6; color: #333; background-color: #f4f4f4; margin: 0; padding: 0; }}
+        .email-wrapper {{ width: 100%; background-color: #f4f4f4; padding: 20px 0; }}
+        .email-container {{ max-width: 800px; margin: 0 auto; background-color: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.05); }}
+        .header {{ background-color: #0054a6; color: #ffffff; padding: 30px 40px; }}
+        .header h1 {{ margin: 0; font-size: 28px; font-weight: 800; letter-spacing: -0.5px; }}
+        .header-sub {{ font-size: 16px; margin-top: 10px; opacity: 0.9; font-weight: 500; }}
+        .content {{ padding: 40px; }}
+        .intro-text {{ margin-bottom: 40px; font-size: 18px; color: #444; border-bottom: 1px solid #eee; padding-bottom: 20px; }}
+        .footer {{ background-color: #333333; padding: 30px; text-align: center; font-size: 14px; color: #bbbbbb; }}
+        .footer p {{ margin: 5px 0; }}
     </style>
     </head>
     <body>
-        <div class="email-container">
-            <!-- 헤더 -->
-            <div class="header">
-                <h1>Daily Market Briefing</h1>
-                <div class="header-info">
-                    POSCO E&C 구매계약실<br>
-                    {today_str}
-                </div>
-            </div>
-            
-            <!-- 본문 -->
-            <div class="content">
-                <div class="intro-text">
-                    안녕하십니까, 구매계약실 여러분.<br>
-                    오늘의 주요 건설/자재 시장 이슈와 리스크 요인을 보고드립니다.
+        <div class="email-wrapper">
+            <div class="email-container">
+                <!-- 헤더 -->
+                <div class="header">
+                    <h1>Daily Market & Risk Briefing</h1>
+                    <div class="header-sub">
+                        POSCO E&C 구매계약실 | {today_str}
+                    </div>
                 </div>
                 
-                {html_body}
-            </div>
-            
-            <!-- 푸터 -->
-            <div class="footer">
-                <p>본 메일은 AI Agent에 의해 자동 생성 및 발송되었습니다.</p>
-                <p>© POSCO E&C Purchase Contract Division</p>
+                <!-- 본문 -->
+                <div class="content">
+                    <div class="intro-text">
+                        안녕하십니까, 구매계약실 여러분.<br>
+                        <strong>{today_str}</strong> 주요 시장 이슈와 리스크 요인을 정리해 드립니다.
+                    </div>
+                    
+                    {html_body}
+                </div>
+                
+                <!-- 푸터 -->
+                <div class="footer">
+                    <p>본 리포트는 AI Agent 시스템에 의해 실시간으로 생성되었습니다.</p>
+                    <p>문의: 구매기획 그룹 | © POSCO E&C</p>
+                </div>
             </div>
         </div>
     </body>
