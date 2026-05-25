@@ -89,6 +89,8 @@ def get_real_domain(google_redirect_url):
 def is_blocked_domain(entry):
     """
     실제 기사 도메인이 BLOCKED_DOMAINS에 포함되는지 확인.
+    1차: entry.link URL 문자열 직접 확인 (리다이렉트 없이 즉시 차단)
+    2차: Google 리다이렉트 추적 후 실제 도메인 확인
     - 한국 건설사가 제목에 있으면 차단 대상 도메인이더라도 통과
     - 리다이렉트 실패 시 차단하지 않음 (안전한 방향으로 통과)
     """
@@ -96,6 +98,12 @@ def is_blocked_domain(entry):
     if any(company in entry.title for company in KOREAN_COMPANIES):
         return False
 
+    # 1차: entry.link에 이미 실제 URL이 노출된 경우 즉시 차단
+    raw_link = entry.link.lower()
+    if any(blocked in raw_link for blocked in BLOCKED_DOMAINS):
+        return True
+
+    # 2차: Google 리다이렉트 추적으로 실제 도메인 확인
     domain = get_real_domain(entry.link)
     if not domain:
         return False  # 도메인 확인 실패 시 통과 (차단하지 않음)
