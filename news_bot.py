@@ -245,18 +245,26 @@ def generate_analysis_data(news_items, is_monday=False):
     kst_now = get_korea_time()
     today_formatted = kst_now.strftime("%Y년 %m월 %d일") 
     period_text = "지난 주말부터 오늘까지의" if is_monday else "오늘 하루 동안의"
+
+    # [수정 11] 모델 폴백 배열 (2026년 6월 기준 무료 티어)
+    # gemini-2.5-flash은 2026-04-01부로 유료 전용 전환 → 무료 모델로 교체
+    # gemini-3.1-flash-lite : 무료 티어 최신 모델 (Google 공식 문서 확인)
+    # gemini-2.5-flash-lite : 구세대이나 무료 티어 유지 중인 폴백
+    MODEL_FALLBACK = [
+        'gemini-3.1-flash-lite',
+        'gemini-2.5-flash-lite',
+    ]
     
     print("🧠 AI 분석 시작 (JSON 모드)...")
-    try:
-        genai.configure(api_key=GOOGLE_API_KEY)
-        model = genai.GenerativeModel('gemini-2.5-flash')
 
-        news_text = ""
-        for item in news_items:
-            # [수정 9] 날짜 정보 추가: AI가 과거 기사를 직접 판별할 수 있도록
-            news_text += f"ID:{item['id']} | [{item['category']}] [날짜:{item['date']}] {item['title']}\n"
+    genai.configure(api_key=GOOGLE_API_KEY)
 
-        prompt = f"""
+    news_text = ""
+    for item in news_items:
+        # [수정 9] 날짜 정보 추가: AI가 과거 기사를 직접 판별할 수 있도록
+        news_text += f"ID:{item['id']} | [{item['category']}] [날짜:{item['date']}] {item['title']}\n"
+
+    prompt = f"""
         오늘은 {today_formatted}입니다.
         당신은 포스코이앤씨 구매계약실의 수석 애널리스트입니다.
         
@@ -286,34 +294,51 @@ def generate_analysis_data(news_items, is_monday=False):
         }}
         """
         
-        safety_settings = [
-            {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
-        ]
+    safety_settings = [
+        {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+        {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+        {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+        {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+    ]
 
-        response = model.generate_content(prompt, safety_settings=safety_settings)
-        
-        text = response.text
-        start_idx = text.find('{')
-        end_idx = text.rfind('}')
-        
-        if start_idx != -1 and end_idx != -1:
-            clean_json = text[start_idx:end_idx+1]
-            data = json.loads(clean_json)
-            
-            if 'weather_summary' in data:
-                data['weather_summary'] = re.sub(r'\s*\(ID:\s*\d+\)', '', data['weather_summary'], flags=re.IGNORECASE)
-                data['weather_summary'] = re.sub(r'ID:\s*\d+', '', data['weather_summary'], flags=re.IGNORECASE)
-            
-            return data
-        else:
-            return None
+    last_error = None
+    for model_name in MODEL_FALLBACK:
+        try:
+            print(f"  ▶ 모델 시도: {model_name}")
+            model = genai.GenerativeModel(model_name)
+            response = model.generate_content(prompt, safety_settings=safety_settings)
 
-    except Exception as e:
-        print(f"❌ AI 분석 중 오류: {e}")
-        return None
+            text = response.text
+            start_idx = text.find('{')
+            end_idx = text.rfind('}')
+
+            if start_idx != -1 and end_idx != -1:
+                clean_json = text[start_idx:end_idx+1]
+                data = json.loads(clean_json)
+
+                if 'weather_summary' in data:
+                    data['weather_summary'] = re.sub(r'\s*\(ID:\s*\d+\)', '', data['weather_summary'], flags=re.IGNORECASE)
+                    data['weather_summary'] = re.sub(r'ID:\s*\d+', '', data['weather_summary'], flags=re.IGNORECASE)
+
+                print(f"  ✅ {model_name} 분석 완료")
+                return data
+            else:
+                print(f"  ⚠️ {model_name}: JSON 파싱 실패, 다음 모델 시도")
+                continue
+
+        except Exception as e:
+            last_error = e
+            err_str = str(e)
+            # 429 쿼터 초과 시 다음 모델로 폴백
+            if '429' in err_str or 'quota' in err_str.lower() or 'rate' in err_str.lower():
+                print(f"  ⚠️ {model_name} 쿼터 초과(429), 다음 모델로 전환...")
+                continue
+            # 그 외 오류는 즉시 중단 (모델 오류가 아닌 네트워크 등 공통 오류)
+            print(f"  ❌ {model_name} 오류: {e}")
+            break
+
+    print(f"❌ 모든 모델 실패. 마지막 오류: {last_error}")
+    return None
 
 def build_exec_summary(ai_data, news_items):
     """
