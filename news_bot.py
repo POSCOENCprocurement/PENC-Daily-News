@@ -99,7 +99,9 @@ def is_blocked_domain(entry):
         return False
 
     # 1차: entry.link에 이미 실제 URL이 노출된 경우 즉시 차단
-    raw_link = entry.link.lower()
+    raw_link = getattr(entry, 'link', '').lower()
+    if not raw_link:
+        return False  # 링크 없으면 차단하지 않음 (fetch_news에서 이미 스킵되나 이중 방어)
     if any(blocked in raw_link for blocked in BLOCKED_DOMAINS):
         return True
 
@@ -130,6 +132,24 @@ def is_overseas_local_news(entry):
         return True
 
     return False
+
+def sanitize_ai_text(text):
+    """
+    [수정 12] AI 생성 텍스트에서 URL/이메일 주소 제거.
+    gemini-3.1-flash-lite 등 신규 모델이 요약/인사이트에 출처 URL을 자동 포함하는 경향이 있어
+    보안 메일 스캐너(AhnLab MDS 등)가 해당 URL을 추적, 피싱으로 오탐하는 문제 방지.
+    """
+    if not text:
+        return text
+    # http/https URL 제거
+    text = re.sub(r'https?://\S+', '', text)
+    # www로 시작하는 URL 제거
+    text = re.sub(r'www\.\S+', '', text)
+    # 이메일 주소 제거 (ASCII 문자만 매칭하여 한글 오인식 방지)
+    text = re.sub(r'[a-zA-Z0-9.\-+]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}', '', text)
+    # 다중 공백 정리
+    text = re.sub(r'  +', ' ', text).strip()
+    return text
 
 def get_korea_time():
     utc_now = datetime.now(timezone.utc)
@@ -216,6 +236,7 @@ def fetch_news(time_window_days=1, time_window_hours=24):
                 if valid_count >= 10: break 
 
                 if is_recent(entry, time_window_hours):
+                    if not getattr(entry, 'link', None): continue          # link 없는 기사 스킵 (원문 버튼 파손 방지)
                     if is_spam_news(entry.title): continue
                     if is_video_content(entry.title): continue          # [수정 8] 영상/VOD 콘텐츠 차단
                     if is_overseas_local_news(entry): continue          # [수정 6] 해외 현지 로컬 뉴스 차단 (제목/source 기반)
@@ -278,6 +299,7 @@ def generate_analysis_data(news_items, is_monday=False):
         [🚨 중요: 과거 기사 필터링 (Sanity Check)]
         - 제목과 문맥을 분석하여, 오늘({today_formatted}) 기준으로 시의성이 떨어지거나 이미 종료된 과거 사건(예: 2023년 행사, 작년 실적 등)은 절대 선정하지 마세요.
         - **weather_summary 작성 시 (ID:숫자) 같은 참조 번호를 절대 포함하지 마세요.**
+        - **summary, insight, weather_summary 텍스트에 URL(http/https/www), 이메일 주소를 절대 포함하지 마세요. 보안 필터 차단 원인이 됩니다.**
 
         [필수 출력 형식 (JSON Only)]
         반드시 아래 JSON 포맷으로만 응답하세요. 서론이나 마크다운 태그를 붙이지 마세요.
@@ -316,9 +338,16 @@ def generate_analysis_data(news_items, is_monday=False):
                 clean_json = text[start_idx:end_idx+1]
                 data = json.loads(clean_json)
 
+                # ID 참조 번호 제거
                 if 'weather_summary' in data:
                     data['weather_summary'] = re.sub(r'\s*\(ID:\s*\d+\)', '', data['weather_summary'], flags=re.IGNORECASE)
                     data['weather_summary'] = re.sub(r'ID:\s*\d+', '', data['weather_summary'], flags=re.IGNORECASE)
+
+                # [수정 12] AI 생성 텍스트 전체 URL/이메일 제거 (보안 스캐너 오탐 방지)
+                data['weather_summary'] = sanitize_ai_text(data.get('weather_summary', ''))
+                for card in data.get('selected_cards', []):
+                    card['summary'] = sanitize_ai_text(card.get('summary', ''))
+                    card['insight'] = sanitize_ai_text(card.get('insight', ''))
 
                 print(f"  ✅ {model_name} 분석 완료")
                 return data
@@ -463,7 +492,7 @@ def build_html_report(ai_data, news_items, is_monday=False):
             <div class="content">
                 <div class="weather-box">
                     <h2 class="weather-title">🌤️ Market Weather Summary</h2>
-                    <div style="font-size: 17px;">{ai_data.get('weather_summary', '시장 분석 데이터 없음')}</div>
+                    <div style="font-size: 17px;">{html.escape(ai_data.get('weather_summary', '시장 분석 데이터 없음'))}</div>
                 </div>
                 {build_exec_summary(ai_data, news_items)}
     """
@@ -490,19 +519,25 @@ def build_html_report(ai_data, news_items, is_monday=False):
                 elif risk_level == 'Warning':
                     bg_color, text_color = "#fff4e5", "#ed6c02"
 
+                # [수정 13] AI 생성 텍스트 HTML 특수문자 이스케이프 (레이아웃 파손 방지)
+                safe_summary = html.escape(ai_info.get('summary', ''))
+                safe_insight = html.escape(ai_info.get('insight', ''))
+                # [수정 13] href URL 이스케이프 (&→&amp; 변환, 브라우저 정상 렌더링)
+                safe_link = html.escape(item['link'])
+
                 cat_html += f"""
                 <div class="card">
                     <div class="card-title">{safe_title}</div>
-                    <div class="card-body">{ai_info['summary']}</div>
+                    <div class="card-body">{safe_summary}</div>
                     
                     <table class="insight-table" style="background-color: {bg_color};">
                         <tr>
                             <td class="insight-label" style="color: {text_color};">💡 Insight:</td>
-                            <td class="insight-text" style="color: {text_color};">{ai_info['insight']}</td>
+                            <td class="insight-text" style="color: {text_color};">{safe_insight}</td>
                         </tr>
                     </table>
                     <div style="text-align: right;">
-                        <a href="{item['link']}" class="btn" target="_blank" rel="noopener noreferrer">🔗 원문 기사 보기</a>
+                        <a href="{safe_link}" class="btn" target="_blank" rel="noopener noreferrer">🔗 원문 기사 보기</a>
                     </div>
                 </div>
                 """
@@ -517,9 +552,11 @@ def build_html_report(ai_data, news_items, is_monday=False):
             for h_item in headlines:
                 # [수정 5] 단신 제목도 동일하게 이스케이프 처리
                 safe_h_title = html.escape(h_item['title'])
+                # [수정 13] 단신 href URL 이스케이프
+                safe_h_link = html.escape(h_item['link'])
                 cat_html += f"""
                 <li class="headline-item">
-                    <a href="{h_item['link']}" class="headline-link" target="_blank" rel="noopener noreferrer">{safe_h_title}</a>
+                    <a href="{safe_h_link}" class="headline-link" target="_blank" rel="noopener noreferrer">{safe_h_title}</a>
                 </li>
                 """
             cat_html += "</ul></div>"
